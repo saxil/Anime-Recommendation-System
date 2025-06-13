@@ -1,46 +1,59 @@
 # Anime Recommendation System
 
-This Streamlit application provides anime recommendations based on user preferences. It uses an internal structured dataset of anime information and offers two main ways to discover new anime: by finding titles similar to a user's favorite, or by exploring recommendations within specific genres.
+This Streamlit application provides dynamic anime recommendations by leveraging the **Jikan API**, an unofficial MyAnimeList API. It allows users to discover new anime by finding titles similar to their favorites or by exploring recommendations within specific genres, with all data fetched live.
 
 ## Features
 
 *   **Recommend Similar Anime:**
-    *   Users can enter the title of an anime they enjoy.
-    *   The system analyzes the input anime's genres and description keywords.
-    *   It then suggests a list of other anime from its dataset that have the highest similarity based on shared genres and common keywords.
+    *   Users enter the title of an anime they enjoy.
+    *   The system queries the Jikan API to find the MyAnimeList ID of the input anime.
+    *   It then fetches direct recommendations for that anime from Jikan, which are often curated by MyAnimeList users.
+    *   Results are displayed with details like score, image, genres, a synopsis snippet, and a direct link to the anime's MyAnimeList page.
 
 *   **Explore by Genre (For New Watchers):**
-    *   Users looking to start watching anime or explore new categories can select from a predefined list of popular genres (e.g., Rom-Com, Action, Thriller, Sci-Fi, Fantasy, Slice of Life).
-    *   The application will display a few sample anime titles belonging to the selected genre, along with their ratings, full genre list, and descriptions. These selections are randomized from the available anime in that genre.
+    *   Users can select from a list of popular genres (e.g., Action, Comedy, Fantasy, Sci-Fi, etc.), dynamically sourced from the Jikan API's genre list.
+    *   The application then queries the Jikan API for popular anime within the selected genre.
+    *   A few sample anime are displayed with their score, image, genres, synopsis, and a link to their MyAnimeList page.
 
 ## How It Works
 
-The recommendation logic is based on:
+The application's core logic relies on real-time interactions with the Jikan API:
 
-1.  **Content-Based Filtering:** For similar anime recommendations, the system calculates a similarity score between the user's favorite anime and others in the dataset. This score is determined by:
-    *   Matching genres (higher weight).
-    *   Common keywords extracted from the anime descriptions (lower weight). Stop words are removed, and descriptions are processed to identify significant terms.
-2.  **Genre-Based Random Sampling:** For genre exploration, the system filters its dataset for anime matching the chosen genre and then randomly selects a few titles to present.
+1.  **Fetching Anime Data:** When a user searches for an anime or requests recommendations by genre, the application makes HTTP GET requests to specific Jikan API endpoints.
+2.  **Similar Anime Logic:**
+    *   The input title is used to search for the anime on MyAnimeList via the Jikan API to retrieve its unique MAL ID.
+    *   This MAL ID is then used to fetch user-generated recommendations for that specific anime directly from Jikan.
+3.  **Genre Exploration Logic:**
+    *   The application first fetches a list of available anime genres and their IDs from Jikan.
+    *   When a user selects a genre, the system queries Jikan for top-scoring or popular anime within that genre.
+4.  **Data Presentation:** All anime information, including titles, scores, synopses, images, and genre lists, is parsed from the Jikan API responses and formatted for display in the Streamlit UI.
 
-## Data Source
+## API Usage: Jikan API
 
-Currently, this application uses a limited, manually curated dataset (`ANIME_DATA` within `src/main.py`) for demonstration purposes. This dataset includes around 30 diverse anime entries with titles, genres, descriptions, and ratings.
-
-**Future Enhancement:** A planned improvement is to integrate a comprehensive external anime API (e.g., Jikan API for MyAnimeList data) to provide a much wider range of anime and more up-to-date information.
+*   **Data Source:** This application uses the **Jikan API (v4)**, available at `https://api.jikan.moe/v4/`. Jikan is an unofficial, free, and open-source REST API for MyAnimeList, providing access to a wide range of anime and manga data.
+*   **Dependency:** The functionality and availability of this recommendation system are directly dependent on the Jikan API.
+*   **Rate Limiting:** The Jikan API has rate limits to prevent abuse. This application attempts to respect these by including small delays (`time.sleep(0.5)`) between API calls made by the `jikan_client.py` module. Frequent or rapid use might still lead to temporary blocks by the API.
+*   **Unofficial Nature:** As Jikan is an unofficial API, its data accuracy and availability are tied to MyAnimeList's own structure and any changes MyAnimeList might make.
 
 ## How to Run
 
-1.  Ensure you have Python and Streamlit installed.
-    ```bash
-    pip install streamlit
-    ```
-2.  Navigate to the project's root directory.
-3.  Run the Streamlit application using the following command:
-    ```bash
-    streamlit run src/main.py
-    ```
-    This will open the application in your default web browser.
+1.  **Prerequisites:**
+    *   Python 3.7+
+    *   Streamlit
+    *   Requests (Python HTTP library)
+2.  **Installation:**
+    *   If you haven't already, install Streamlit and Requests:
+        ```bash
+        pip install streamlit requests
+        ```
+3.  **Running the Application:**
+    *   Navigate to the project's root directory in your terminal.
+    *   Execute the following command:
+        ```bash
+        streamlit run src/main.py
+        ```
+    *   Streamlit will typically open the application automatically in your default web browser.
 
 ## Contributing (Future)
 
-Contributions that enhance the dataset, improve the recommendation algorithms, or integrate external APIs are welcome. Please refer to future contribution guidelines when available.
+Contributions that improve the UI/UX, enhance recommendation logic (e.g., advanced filtering, alternative recommendation sources), or add new features are welcome. Please refer to future contribution guidelines when available.
