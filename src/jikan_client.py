@@ -52,22 +52,26 @@ def get_anime_details_by_id(mal_id: int) -> dict | None:
         print(f"Error fetching anime details for ID {mal_id}: {e}")
         return None
 
-def search_anime_by_genre(genre_id: int, page: int = 1, limit: int = 10) -> list:
+def search_anime_by_genre(genre_id: int, page: int = 1, limit: int = 10) -> tuple[list, dict | None]:
     """Searches for anime by genre ID using the Jikan API.
     Orders by score descending and filters for SFW (Safe For Work) content.
+    Returns a tuple containing the list of anime and pagination info.
     """
     url = f"{JIKAN_API_BASE_URL}/anime?genres={genre_id}&page={page}&limit={limit}&sfw=true&order_by=score&sort=desc"
     try:
         response = requests.get(url)
         time.sleep(0.5) # Respect basic rate limits
         if response.status_code == 200:
-            return response.json().get('data', [])
+            json_response = response.json()
+            anime_data = json_response.get('data', [])
+            pagination_info = json_response.get('pagination', None)
+            return anime_data, pagination_info
         else:
             print(f"Error searching anime by genre ID {genre_id}: Status code {response.status_code} - {response.text}")
-            return []
+            return [], None
     except requests.exceptions.RequestException as e:
         print(f"Error searching anime by genre ID {genre_id}: {e}")
-        return []
+        return [], None
 
 def get_anime_recommendations(mal_id: int) -> list:
     """Fetches anime recommendations for a given anime ID from the Jikan API."""
