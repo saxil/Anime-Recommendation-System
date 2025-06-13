@@ -28,56 +28,172 @@ def format_anime_data_from_jikan(jikan_anime_data):
     jpg_images = images.get('jpg', {}) if isinstance(images, dict) else {}
     image_url = jpg_images.get('large_image_url', jpg_images.get('image_url', None)) if isinstance(jpg_images, dict) else None
     genres_list = [g['name'] for g in jikan_anime_data.get('genres', []) if isinstance(g, dict) and 'name' in g]
-    return {
+    # theme_names, studio_names, producer_names might be pre-populated by get_anime_details_by_id
+    # or need to be extracted if the raw Jikan object is passed.
+    # For now, format_anime_data_from_jikan will primarily rely on these being top-level keys
+    # if they were added by get_anime_details_by_id.
+    # If raw search results are passed, these might not be directly available in the same way.
+    # This function should consistently return these keys, defaulting to empty lists if not found.
+
+    formatted_data = {
         'mal_id': jikan_anime_data.get('mal_id'),
         'title': jikan_anime_data.get('title', 'N/A'),
         'score': jikan_anime_data.get('score'),
         'synopsis': jikan_anime_data.get('synopsis', 'No synopsis available.'),
         'image_url': image_url,
-        'genres_list': genres_list
+        'genres_list': genres_list,
+        'theme_names': jikan_anime_data.get('theme_names', [t['name'] for t in jikan_anime_data.get('themes', []) if isinstance(t, dict) and 'name' in t]),
+        'studio_names': jikan_anime_data.get('studio_names', [s['name'] for s in jikan_anime_data.get('studios', []) if isinstance(s, dict) and 'name' in s]),
+        'producer_names': jikan_anime_data.get('producer_names', [p['name'] for p in jikan_anime_data.get('producers', []) if isinstance(p, dict) and 'name' in p])
     }
+    return formatted_data
 
 def recommend_similar_anime(favorite_anime_title: str, top_n: int = 5) -> list:
-    print(f"Starting Jikan recommendation for: {favorite_anime_title}")
+    """
+    Hybrid recommendation:
+    Phase 1: Fetch direct Jikan recommendations.
+    Phase 2: If needed, augment with targeted keyword searches based on favorite's themes/studios.
+    Phase 3 (Next subtask): Score, merge, deduplicate, and rank all candidates.
+    """
+    print(f"Hybrid Phase 1&2 for: {favorite_anime_title}")
+    st.session_state.jikan_error_displayed = False # Reset error flag
 
-    searched_anime_list = search_anime_by_title(favorite_anime_title)
+    # --- Phase 1: Initial Jikan Recommendations & Favorite Anime Details ---
+    with st.spinner(f"Searching for '{favorite_anime_title}'..."):
+        searched_anime_list = search_anime_by_title(favorite_anime_title)
     if not searched_anime_list:
         st.error(f"Could not find '{favorite_anime_title}' on MyAnimeList. Please check the spelling or try another title.")
         st.session_state.jikan_error_displayed = True
         return []
 
-    favorite_anime_summary = searched_anime_list[0]
-    favorite_anime_mal_id = favorite_anime_summary.get('mal_id')
-
+    favorite_anime_mal_id = searched_anime_list[0].get('mal_id')
     if not favorite_anime_mal_id:
-        st.error("Failed to get MAL ID for the selected anime. The API data might be incomplete.")
+        st.error("Failed to get MAL ID for the searched anime. API data might be incomplete.")
         st.session_state.jikan_error_displayed = True
         return []
 
-    jikan_recommendations = get_anime_recommendations(favorite_anime_mal_id)
-    formatted_recommendations = []
+    with st.spinner(f"Fetching details for '{searched_anime_list[0].get('title', 'anime')}'..."):
+        favorite_anime_details = get_anime_details_by_id(favorite_anime_mal_id)
 
-    if jikan_recommendations:
-        for rec_entry in jikan_recommendations:
-            formatted_rec = format_anime_data_from_jikan(rec_entry)
-            if formatted_rec and formatted_rec.get('mal_id') and formatted_rec['mal_id'] != favorite_anime_mal_id:
-                formatted_recommendations.append(formatted_rec)
-        if not formatted_recommendations and len(jikan_recommendations) > 0 : # Had recommendations, but all were self or unformattable
-             st.info(f"Found '{favorite_anime_title}' on MyAnimeList, but it has no other distinct anime recommendations listed there at the moment.")
-             st.session_state.jikan_error_displayed = True
+    if not favorite_anime_details:
+        st.error(f"Could not fetch full details for '{searched_anime_list[0].get('title', 'anime')}' from MyAnimeList.")
+        st.session_state.jikan_error_displayed = True
+        return []
 
-    # This part handles when jikan_recommendations itself is empty or None
-    if not jikan_recommendations:
-        source_anime_details = get_anime_details_by_id(favorite_anime_mal_id)
-        if source_anime_details:
-             st.info(f"Found '{favorite_anime_title}' on MyAnimeList, but it doesn't have direct recommendations there. You could try exploring by genre instead!")
-             st.session_state.jikan_error_displayed = True
-        else:
-            st.error(f"Could not fetch details for '{favorite_anime_title}' after finding it. API might be unstable.")
-            st.session_state.jikan_error_displayed = True
+    # Ensure favorite_anime_details is also formatted for consistency, especially for genre_names
+    # Note: get_anime_details_by_id already adds theme_names, studio_names, producer_names.
+    # format_anime_data_from_jikan will ensure genres_list is also present.
+    favorite_anime_formatted_details = format_anime_data_from_jikan(favorite_anime_details)
+    if not favorite_anime_formatted_details: # Should not happen if details were fetched
+        st.error("Failed to format details for the favorite anime.")
+        st.session_state.jikan_error_displayed = True
+        return []
 
-    formatted_recommendations.sort(key=lambda x: x.get('score') or 0, reverse=True)
-    return formatted_recommendations[:top_n]
+
+    with st.spinner(f"Fetching direct recommendations for '{favorite_anime_formatted_details['title']}'..."):
+        direct_jikan_recs_raw = get_anime_recommendations(favorite_anime_mal_id)
+
+    direct_jikan_recs_formatted = []
+    if direct_jikan_recs_raw:
+        for rec_raw in direct_jikan_recs_raw:
+            formatted_rec = format_anime_data_from_jikan(rec_raw)
+            if formatted_rec and formatted_rec.get('mal_id') != favorite_anime_mal_id:
+                direct_jikan_recs_formatted.append(formatted_rec)
+
+    print(f"Found {len(direct_jikan_recs_formatted)} direct Jikan recommendations.")
+
+    # --- Phase 2: Augmentation via Targeted Search (Conditional & Simplified) ---
+    augmented_recs_formatted = []
+    if len(direct_jikan_recs_formatted) < top_n:
+        print("Direct recommendations less than top_n. Attempting augmentation...")
+
+        fav_genres = favorite_anime_formatted_details.get('genres_list', [])
+        fav_themes = favorite_anime_formatted_details.get('theme_names', [])
+        fav_studios = favorite_anime_formatted_details.get('studio_names', [])
+
+        # Strategy 1: Top Theme + Top Genre
+        if fav_themes and fav_genres:
+            query1 = f"{fav_themes[0]} {fav_genres[0]}"
+            print(f"Augmentation query 1: {query1}")
+            with st.spinner(f"Augmenting with search: '{query1}'..."):
+                results_q1_raw = search_anime_by_title(query1)
+            if results_q1_raw:
+                for res_raw in results_q1_raw:
+                    formatted_res = format_anime_data_from_jikan(res_raw)
+                    if formatted_res and formatted_res.get('mal_id') != favorite_anime_mal_id:
+                        augmented_recs_formatted.append(formatted_res)
+
+        # Strategy 2: Top Studio + Top Genre
+        if fav_studios and fav_genres and (len(direct_jikan_recs_formatted) + len(augmented_recs_formatted)) < top_n * 1.5 : # Avoid too many API calls if already close
+            query2 = f"{fav_studios[0]} {fav_genres[0]}"
+            print(f"Augmentation query 2: {query2}")
+            with st.spinner(f"Augmenting with search: '{query2}'..."):
+                results_q2_raw = search_anime_by_title(query2)
+            if results_q2_raw:
+                for res_raw in results_q2_raw:
+                    formatted_res = format_anime_data_from_jikan(res_raw)
+                    if formatted_res and formatted_res.get('mal_id') != favorite_anime_mal_id:
+                        augmented_recs_formatted.append(formatted_res)
+
+        print(f"Found {len(augmented_recs_formatted)} potential augmented recommendations.")
+
+    # --- Phase 3: Combine, Score, and Rank ---
+
+    # Add is_direct_jikan_rec flag and initialize local_score
+    for rec in direct_jikan_recs_formatted:
+        rec['is_direct_jikan_rec'] = True
+        rec['local_score'] = 0
+    for rec in augmented_recs_formatted:
+        rec['is_direct_jikan_rec'] = False # Came from augmented search
+        rec['local_score'] = 0
+
+    # Combine and Deduplicate
+    all_candidates = {} # Use dict for deduplication based on mal_id
+    for rec in direct_jikan_recs_formatted + augmented_recs_formatted:
+        if rec.get('mal_id') and rec.get('mal_id') != favorite_anime_mal_id: # Exclude favorite itself
+            # If duplicate, direct Jikan rec takes precedence if it was already there
+            # or if the current one is direct and the existing one in all_candidates isn't.
+            if rec['mal_id'] not in all_candidates or \
+               (rec['is_direct_jikan_rec'] and not all_candidates[rec['mal_id']]['is_direct_jikan_rec']):
+                all_candidates[rec['mal_id']] = rec
+
+    unique_candidates = list(all_candidates.values())
+
+    # Calculate local_score for all unique candidates
+    fav_genres_set = set(g.lower() for g in favorite_anime_formatted_details.get('genres_list', []))
+    fav_themes_set = set(t.lower() for t in favorite_anime_formatted_details.get('theme_names', []))
+    fav_studios_set = set(s.lower() for s in favorite_anime_formatted_details.get('studio_names', []))
+
+    for candidate in unique_candidates:
+        candidate_genres_set = set(g.lower() for g in candidate.get('genres_list', []))
+        candidate_themes_set = set(t.lower() for t in candidate.get('theme_names', []))
+        candidate_studios_set = set(s.lower() for s in candidate.get('studio_names', []))
+
+        score = 0
+        score += len(fav_genres_set.intersection(candidate_genres_set)) * 2
+        score += len(fav_themes_set.intersection(candidate_themes_set)) * 1
+        score += len(fav_studios_set.intersection(candidate_studios_set)) * 3
+        candidate['local_score'] = score
+
+    # Sort unique candidates: Direct Jikan recs first, then by Jikan score, then by local_score
+    unique_candidates.sort(key=lambda x: (
+        x.get('is_direct_jikan_rec', False),
+        x.get('score') or 0,  # Jikan's original score
+        x.get('local_score', 0)
+    ), reverse=True) # True for direct recs, higher scores = better
+
+    final_recommendations = unique_candidates[:top_n]
+
+    if not final_recommendations and not st.session_state.jikan_error_displayed:
+        st.info(f"No recommendations could be compiled for '{favorite_anime_title}' after filtering and scoring.")
+        st.session_state.jikan_error_displayed = True
+
+    # Phase 4: Formatting - is largely handled by format_anime_data_from_jikan
+    # and the structure built. Ensure all needed fields are present.
+    # The fields 'is_direct_jikan_rec' and 'local_score' can remain for debugging or future UI enhancements.
+
+    return final_recommendations
+
 
 def recommend_by_genre(genre_name: str, genre_id_map: dict, n: int = 3) -> list:
     genre_id = genre_id_map.get(genre_name.lower())
@@ -98,7 +214,7 @@ def recommend_by_genre(genre_name: str, genre_id_map: dict, n: int = 3) -> list:
                 seen_mal_ids.add(formatted_rec['mal_id'])
                 if len(formatted_recommendations) >= n:
                     break
-    
+
     if not formatted_recommendations:
         st.info(f"No anime found for genre '{genre_name}' on MyAnimeList currently.")
         st.session_state.jikan_error_displayed = True
@@ -139,6 +255,13 @@ if st.button('Recommend Similar Anime', key='recommend_similar_btn'):
                     else:
                         st.caption("No image available")
                     st.write(f"**Genres:** {', '.join(rec.get('genres_list', ['N/A']))}")
+                    if rec.get('theme_names'):
+                        st.markdown(f"**Themes:** {', '.join(rec['theme_names'])}")
+                    if rec.get('studio_names'):
+                        st.markdown(f"**Studios:** {', '.join(rec['studio_names'])}")
+                    # Producers can be added similarly if desired:
+                    # if rec.get('producer_names'):
+                    #    st.markdown(f"**Producers:** {', '.join(rec['producer_names'])}")
                     synopsis = rec.get('synopsis', 'N/A')
                     st.caption(f"**Synopsis:** {synopsis[:250] + '...' if synopsis and len(synopsis) > 250 else synopsis}")
                     if rec.get('mal_id'):

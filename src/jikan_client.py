@@ -25,7 +25,26 @@ def get_anime_details_by_id(mal_id: int) -> dict | None:
         response = requests.get(url)
         time.sleep(0.5) # Respect basic rate limits
         if response.status_code == 200:
-            return response.json().get('data', None)
+            anime_data = response.json().get('data', None)
+            if anime_data:
+                # Extract theme names
+                anime_data['theme_names'] = [
+                    theme['name'] for theme in anime_data.get('themes', [])
+                    if isinstance(theme, dict) and 'name' in theme
+                ]
+                # Extract studio names
+                anime_data['studio_names'] = [
+                    studio['name'] for studio in anime_data.get('studios', [])
+                    if isinstance(studio, dict) and 'name' in studio
+                ]
+                # Extract producer names
+                anime_data['producer_names'] = [
+                    producer['name'] for producer in anime_data.get('producers', [])
+                    if isinstance(producer, dict) and 'name' in producer
+                ]
+                # Genres are already part of anime_data['genres'] as a list of dicts,
+                # format_anime_data_from_jikan in main.py already handles extracting their names.
+            return anime_data
         else:
             print(f"Error fetching anime details for ID {mal_id}: Status code {response.status_code} - {response.text}")
             return None
