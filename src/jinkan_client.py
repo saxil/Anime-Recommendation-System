@@ -29,7 +29,11 @@ def get_anime_details_by_id(mal_id: int) -> dict | None:
             if anime_data:
                 # Extract theme names
                 anime_data['theme_names'] = [
+<<<<<<< Updated upstream
                     theme['name'] for theme in anime_data.get('themes', []) 
+=======
+                    theme['name'] for theme in anime_data.get('themes', [])
+>>>>>>> Stashed changes
                     if isinstance(theme, dict) and 'name' in theme
                 ]
                 # Extract studio names
@@ -109,4 +113,8 @@ def get_genre_id_map() -> dict:
             return genre_map # Return empty or partially filled map
     except requests.exceptions.RequestException as e:
         print(f"Error fetching anime genres: {e}")
+<<<<<<< Updated upstream
         return genre_map # Return empty or partially filled map
+=======
+        return genre_map # Return empty or partially filled map
+>>>>>>> Stashed changes
