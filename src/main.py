@@ -1,314 +1,279 @@
 import streamlit as st
-from src.jikan_client import (
-    search_anime_by_title,
-    get_anime_recommendations,
-    get_anime_details_by_id,
-    search_anime_by_genre,
-    get_genre_id_map
-)
+import random # Keep for now, might be used by older recommend_by_genre
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# --- Jikan Integration & Helper Functions ---
-@st.cache_data(ttl=3600) # Cache for 1 hour
-def fetch_genre_map_from_api():
-    """Fetches and caches the genre map from Jikan API."""
-    print("Fetching genre map from Jikan API...")
-    return get_genre_id_map()
-
-GENRE_ID_MAP = fetch_genre_map_from_api()
-if GENRE_ID_MAP is None:
-    GENRE_ID_MAP = {}
-AVAILABLE_GENRES_FROM_API = sorted(GENRE_ID_MAP.keys())
-
-
-def format_anime_data_from_jikan(jikan_anime_data):
-    if not jikan_anime_data:
-        return None
-    images = jikan_anime_data.get('images', {})
-    jpg_images = images.get('jpg', {}) if isinstance(images, dict) else {}
-    image_url = jpg_images.get('large_image_url', jpg_images.get('image_url', None)) if isinstance(jpg_images, dict) else None
-    genres_list = [g['name'] for g in jikan_anime_data.get('genres', []) if isinstance(g, dict) and 'name' in g]
-
-    formatted_data = {
-        'mal_id': jikan_anime_data.get('mal_id'),
-        'title': jikan_anime_data.get('title', 'N/A'),
-        'score': jikan_anime_data.get('score'),
-        'synopsis': jikan_anime_data.get('synopsis', 'No synopsis available.'),
-        'image_url': image_url,
-        'genres_list': genres_list,
-        'theme_names': jikan_anime_data.get('theme_names', [t['name'] for t in jikan_anime_data.get('themes', []) if isinstance(t, dict) and 'name' in t]),
-        'studio_names': jikan_anime_data.get('studio_names', [s['name'] for s in jikan_anime_data.get('studios', []) if isinstance(s, dict) and 'name' in s]),
-        'producer_names': jikan_anime_data.get('producer_names', [p['name'] for p in jikan_anime_data.get('producers', []) if isinstance(p, dict) and 'name' in p])
+# Placeholder for ANIME_DATA - In a real scenario on the feat/non-api-tfidf branch,
+# this would be the large, locally defined list of anime dictionaries.
+# For this operation, we'll define a minimal version to make the script runnable,
+# but the actual TF-IDF will operate on the full ANIME_DATA from that branch.
+ANIME_DATA = [
+    {
+        'title': 'Attack on Titan',
+        'genre': ['Action', 'Dark Fantasy', 'Post-apocalyptic'],
+        'description': 'In a world where humanity resides within enormous walled cities to protect themselves from giant humanoid Titans, Eren Yeager vows to exterminate the Titans after they bring about the destruction of his hometown and the death of his mother. The story follows Eren, his adoptive sister Mikasa Ackerman, and their friend Armin Arlert, as they join the military to fight the Titans and uncover the mysteries of their world.',
+        'rating': 9.0
+    },
+    {
+        'title': 'Death Note',
+        'genre': ['Thriller', 'Supernatural', 'Mystery'],
+        'description': 'A brilliant high school student named Light Yagami discovers a mysterious notebook called the Death Note, which grants its user the ability to kill anyone whose name and face they know. Light decides to use the Death Note to rid the world of criminals, but his actions attract the attention of a brilliant detective known only as L. A deadly game of cat and mouse ensues as Light tries to create his ideal world while evading L.',
+        'rating': 8.6
+    },
+    {
+        'title': 'Naruto',
+        'genre': ['Action', 'Adventure', 'Fantasy'],
+        'description': 'Naruto Uzumaki, a young ninja who seeks recognition from his peers and dreams of becoming the Hokage, the leader of his village. The story is told in two parts – the first set in Naruto\'s pre-teen years, and the second in his teens. Naruto is an orphaned ninja from the Hidden Leaf Village, who is ostracized by the villagers because he is the host of the Nine-Tailed Fox, a powerful creature that attacked the village years ago.',
+        'rating': 8.4
+    },
+    # Add more diverse entries to make TF-IDF meaningful
+    {
+        'title': 'Kaguya-sama: Love is War',
+        'genre': ['Rom-Com', 'Psychological', 'Slice of Life'],
+        'description': 'At the prestigious Shuchiin Academy, student council president Miyuki Shirogane and vice-president Kaguya Shinomiya are considered the perfect couple. However, despite having feelings for each other, they are too proud to confess, leading to a series of elaborate schemes and mind games to try and make the other confess first. Their daily interactions become a battle of wits and romance.',
+        'rating': 8.5
+    },
+    {
+        'title': 'Steins;Gate',
+        'genre': ['Thriller', 'Sci-Fi', 'Psychological', 'Drama'],
+        'description': 'Rintaro Okabe, a self-proclaimed "mad scientist," runs a "Future Gadget Laboratory" in Akihabara with his friends. While attempting to create a time machine by modifying a microwave oven, they discover that they can send text messages to the past. Their experiments soon attract the attention of a mysterious organization called SERN.',
+        'rating': 9.1
+    },
+    {
+        'title': 'Violet Evergarden',
+        'genre': ['Slice of Life', 'Drama', 'Fantasy'],
+        'description': 'The Great War has ended, and Violet Evergarden, a young former soldier, takes up a job as an Auto Memory Doll, transcribing people\'s thoughts and feelings into letters. Through her work, Violet embarks on a journey of self-discovery, learning about human emotions and the meaning of love.',
+        'rating': 8.6
     }
-    return formatted_data
+]
 
-def recommend_similar_anime(favorite_anime_title: str, top_n: int = 5) -> list:
-    print(f"Hybrid Phase 1&2 for: {favorite_anime_title}")
-    st.session_state.jikan_error_displayed = False
+# --- TF-IDF Computation ---
+@st.cache_data
+def compute_anime_similarity_matrices():
+    """
+    Computes TF-IDF vectors and cosine similarity matrix for anime descriptions.
+    Relies on a globally available ANIME_DATA list of dictionaries.
+    """
+    print("Computing TF-IDF and Cosine Similarity Matrices...") # For console verification
+    if not ANIME_DATA:
+        st.error("ANIME_DATA is empty. Cannot compute similarity matrices.")
+        # Return empty structures that won't break downstream code expecting these types
+        return pd.DataFrame(), None
 
-    with st.spinner(f"Searching for '{favorite_anime_title}'..."):
-        searched_anime_list = search_anime_by_title(favorite_anime_title)
-    if not searched_anime_list:
-        st.error(f"Could not find '{favorite_anime_title}' on MyAnimeList. Please check the spelling or try another title.")
-        st.session_state.jikan_error_displayed = True
+    anime_df = pd.DataFrame(ANIME_DATA)
+    anime_df['description'] = anime_df['description'].fillna('') # Handle missing descriptions
+
+    # Ensure titles are unique for mapping, or handle duplicates if necessary
+    # For now, assuming titles are unique enough to serve as identifiers or using index.
+    if anime_df['title'].duplicated().any():
+        print("Warning: Duplicate titles found in ANIME_DATA. This might affect recommendation by title if titles are used as primary keys.")
+        # Consider resetting index to ensure unique IDs if titles are not reliable
+        # anime_df = anime_df.reset_index()
+        # and then use 'index' for mapping if titles are problematic.
+
+    vectorizer = TfidfVectorizer(
+        stop_words='english',
+        ngram_range=(1, 2), # Include unigrams and bigrams
+        min_df=2,           # Ignore terms that appear in only one document
+        max_df=0.85         # Ignore terms that are too frequent (in >85% of docs)
+    )
+
+    try:
+        tfidf_matrix = vectorizer.fit_transform(anime_df['description'])
+        cosine_sim_matrix = cosine_similarity(tfidf_matrix)
+        print(f"Cosine similarity matrix shape: {cosine_sim_matrix.shape}")
+        # Store titles or original indices for mapping if anime_df is not returned directly
+        # For now, returning anime_df is convenient.
+        return cosine_sim_matrix, anime_df
+    except ValueError as e:
+        # This can happen if, after filtering (min_df, max_df), the vocabulary is empty.
+        # Especially with very small ANIME_DATA or non-diverse descriptions.
+        st.error(f"Failed to compute TF-IDF matrix, possibly due to an empty vocabulary after filtering: {e}")
+        print(f"ValueError during TF-IDF: {e}")
+        return pd.DataFrame(), None # Return empty structures
+
+# Compute matrices at app start
+# These will be globally available for the recommendation functions.
+COSINE_SIM_MATRIX, ANIME_DF_PROCESSED = compute_anime_similarity_matrices()
+
+
+# --- TF-IDF Based Recommendation Function ---
+def recommend_similar_anime_tfidf(favorite_anime_title: str, anime_df: pd.DataFrame, similarity_matrix: pd.DataFrame, top_n: int = 5) -> list[str]:
+    """
+    Recommends anime similar to the favorite_anime_title using the precomputed
+    TF-IDF cosine similarity matrix.
+    Returns a list of anime titles.
+    """
+    if anime_df.empty or similarity_matrix is None or similarity_matrix.empty:
+        st.error("Similarity data is not available. Cannot provide TF-IDF recommendations.")
         return []
 
-    favorite_anime_mal_id = searched_anime_list[0].get('mal_id')
-    if not favorite_anime_mal_id:
-        st.error("Failed to get MAL ID for the searched anime. API data might be incomplete.")
-        st.session_state.jikan_error_displayed = True
+    try:
+        # Ensure anime_df index matches the matrix dimensions if titles are not unique,
+        # or if anime_df was reset_indexed during compute_anime_similarity_matrices.
+        # For now, assume 'title' is unique enough or that anime_df.index aligns with matrix.
+        if 'title' not in anime_df.columns:
+            st.error("DataFrame does not contain 'title' column.")
+            return []
+
+        # Find the index of the favorite anime
+        # Using .iloc[0] assumes the title is unique and present.
+        # A more robust way might involve checking if the series is empty.
+        idx_series = anime_df[anime_df['title'] == favorite_anime_title].index
+        if idx_series.empty:
+            st.error(f"Anime '{favorite_anime_title}' not found in the processed dataset.")
+            return []
+        favorite_anime_index = idx_series[0]
+
+    except IndexError:
+        st.error(f"Anime '{favorite_anime_title}' not found in the dataset.")
+        return []
+    except Exception as e:
+        st.error(f"An error occurred while finding the anime: {e}")
         return []
 
-    with st.spinner(f"Fetching details for '{searched_anime_list[0].get('title', 'anime')}'..."):
-        favorite_anime_details = get_anime_details_by_id(favorite_anime_mal_id)
-
-    if not favorite_anime_details:
-        st.error(f"Could not fetch full details for '{searched_anime_list[0].get('title', 'anime')}' from MyAnimeList.")
-        st.session_state.jikan_error_displayed = True
+    # Get similarity scores for the favorite anime
+    try:
+        sim_scores_for_favorite = list(enumerate(similarity_matrix[favorite_anime_index]))
+    except IndexError:
+        st.error(f"Could not retrieve similarity scores for index {favorite_anime_index}. Matrix shape: {similarity_matrix.shape}")
         return []
 
-    favorite_anime_formatted_details = format_anime_data_from_jikan(favorite_anime_details)
-    if not favorite_anime_formatted_details:
-        st.error("Failed to format details for the favorite anime.")
-        st.session_state.jikan_error_displayed = True
-        return []
 
-    with st.spinner(f"Fetching direct recommendations for '{favorite_anime_formatted_details['title']}'..."):
-        direct_jikan_recs_raw = get_anime_recommendations(favorite_anime_mal_id)
+    # Sort anime based on similarity scores
+    # Skip the favorite anime itself (score will be 1.0 with itself)
+    sorted_similar_anime_indices = sorted(sim_scores_for_favorite, key=lambda x: x[1], reverse=True)
 
-    direct_jikan_recs_formatted = []
-    if direct_jikan_recs_raw:
-        for rec_raw in direct_jikan_recs_raw:
-            formatted_rec = format_anime_data_from_jikan(rec_raw)
-            if formatted_rec and formatted_rec.get('mal_id') != favorite_anime_mal_id:
-                direct_jikan_recs_formatted.append(formatted_rec)
+    # Get titles of the top_n most similar anime
+    recommended_anime_titles = []
+    for i, score in sorted_similar_anime_indices:
+        if i == favorite_anime_index:
+            continue # Skip the favorite anime itself
+        if len(recommended_anime_titles) < top_n:
+            try:
+                recommended_anime_titles.append(anime_df['title'].iloc[i])
+            except IndexError:
+                st.warning(f"Index {i} out of bounds for anime_df titles. Skipping.")
+        else:
+            break
 
-    augmented_recs_formatted = []
-    if len(direct_jikan_recs_formatted) < top_n:
-        fav_genres = favorite_anime_formatted_details.get('genres_list', [])
-        fav_themes = favorite_anime_formatted_details.get('theme_names', [])
-        fav_studios = favorite_anime_formatted_details.get('studio_names', [])
+    return recommended_anime_titles
 
-        if fav_themes and fav_genres:
-            query1 = f"{fav_themes[0]} {fav_genres[0]}"
-            with st.spinner(f"Augmenting with search: '{query1}'..."):
-                results_q1_raw = search_anime_by_title(query1)
-            if results_q1_raw:
-                for res_raw in results_q1_raw:
-                    formatted_res = format_anime_data_from_jikan(res_raw)
-                    if formatted_res and formatted_res.get('mal_id') != favorite_anime_mal_id:
-                        augmented_recs_formatted.append(formatted_res)
+# --- Legacy Recommendation Logic (Kept for genre recommendations for now) ---
+STOP_WORDS_LEGACY = set(['a', 'an', 'the', 'is', 'in', 'of', 'to', 'and']) # Example
 
-        if fav_studios and fav_genres and (len(direct_jikan_recs_formatted) + len(augmented_recs_formatted)) < top_n * 1.5 :
-            query2 = f"{fav_studios[0]} {fav_genres[0]}"
-            with st.spinner(f"Augmenting with search: '{query2}'..."):
-                results_q2_raw = search_anime_by_title(query2)
-            if results_q2_raw:
-                for res_raw in results_q2_raw:
-                    formatted_res = format_anime_data_from_jikan(res_raw)
-                    if formatted_res and formatted_res.get('mal_id') != favorite_anime_mal_id:
-                        augmented_recs_formatted.append(formatted_res)
+def extract_keywords_legacy(description_text):
+    if not isinstance(description_text, str): return set()
+    words = description_text.lower().split()
+    return set(word for word in words if word.isalnum() and word not in STOP_WORDS_LEGACY)
 
-    for rec in direct_jikan_recs_formatted:
-        rec['is_direct_jikan_rec'] = True
-        rec['local_score'] = 0
-    for rec in augmented_recs_formatted:
-        rec['is_direct_jikan_rec'] = False
-        rec['local_score'] = 0
+# recommend_similar_anime_legacy is now replaced by recommend_similar_anime_tfidf
+# def recommend_similar_anime_legacy(favorite_anime_title, anime_data_list, top_n=5): ...
 
-    all_candidates = {}
-    for rec in direct_jikan_recs_formatted + augmented_recs_formatted:
-        if rec.get('mal_id') and rec.get('mal_id') != favorite_anime_mal_id:
-            if rec['mal_id'] not in all_candidates or \
-               (rec['is_direct_jikan_rec'] and not all_candidates[rec['mal_id']]['is_direct_jikan_rec']):
-                all_candidates[rec['mal_id']] = rec
+def recommend_by_genre_legacy(genre_name, anime_data_list, n=3):
+    print(f"Legacy genre recommendation for {genre_name}")
+    genre_anime = [
+        anime for anime in anime_data_list
+        if genre_name.lower() in [g.lower() for g in anime['genre']]
+    ]
+    if not genre_anime: return []
+    if len(genre_anime) <= n: return genre_anime
+    return random.sample(genre_anime, n)
 
-    unique_candidates = list(all_candidates.values())
-    fav_genres_set = set(g.lower() for g in favorite_anime_formatted_details.get('genres_list', []))
-    fav_themes_set = set(t.lower() for t in favorite_anime_formatted_details.get('theme_names', []))
-    fav_studios_set = set(s.lower() for s in favorite_anime_formatted_details.get('studio_names', []))
 
-    for candidate in unique_candidates:
-        candidate_genres_set = set(g.lower() for g in candidate.get('genres_list', []))
-        candidate_themes_set = set(t.lower() for t in candidate.get('theme_names', []))
-        candidate_studios_set = set(s.lower() for s in candidate.get('studio_names', []))
-        score = 0
-        score += len(fav_genres_set.intersection(candidate_genres_set)) * 2
-        score += len(fav_themes_set.intersection(candidate_themes_set)) * 1
-        score += len(fav_studios_set.intersection(candidate_studios_set)) * 3
-        candidate['local_score'] = score
+# --- Streamlit UI (Simplified structure from a potential non-API version) ---
+st.set_page_config(layout="wide")
+st.title('Anime Recommendation System (TF-IDF Branch)')
 
-    unique_candidates.sort(key=lambda x: (
-        x.get('is_direct_jikan_rec', False),
-        x.get('score') or 0,
-        x.get('local_score', 0)
-    ), reverse=True)
-
-    final_recommendations = unique_candidates[:top_n]
-
-    if not final_recommendations and not st.session_state.jikan_error_displayed:
-        st.info(f"No recommendations could be compiled for '{favorite_anime_title}' after filtering and scoring.")
-        st.session_state.jikan_error_displayed = True
-    return final_recommendations
-
-# --- Streamlit UI ---
-st.set_page_config(layout="wide") # Use wide layout for better grid display
-st.title('Anime Recommendation System')
-st.write('Welcome to the Anime Recommendation System! Discover anime based on your favorites or explore genres if you\'re new!')
-
-# Initialize session state variables
-if 'genre_recommendations' not in st.session_state:
-    st.session_state.genre_recommendations = None
-if 'selected_genre' not in st.session_state:
-    st.session_state.selected_genre = None
-if 'jikan_error_displayed' not in st.session_state:
-    st.session_state.jikan_error_displayed = False
-if 'genre_page' not in st.session_state:
-    st.session_state.genre_page = 1
-if 'genre_last_page' not in st.session_state:
-    st.session_state.genre_last_page = 1
-if 'genre_has_next_page' not in st.session_state:
-    st.session_state.genre_has_next_page = False
-
-# --- Helper function for displaying an anime item in a column ---
-def display_anime_card(anime_rec, col):
+# Helper function for displaying an anime item (can be adapted)
+def display_anime_card(anime_rec, col, source_note=""):
     with col:
-        with st.expander(f"{anime_rec['title']} (Score: {anime_rec.get('score', 'N/A')})", expanded=True):
-            if anime_rec.get('image_url') and isinstance(anime_rec.get('image_url'), str) and anime_rec.get('image_url').strip():
-                st.image(anime_rec['image_url'], use_column_width='auto')
-            else:
-                st.caption("No image available")
+        with st.expander(f"{anime_rec['title']} (Rating: {anime_rec.get('rating', 'N/A')}) {source_note}", expanded=True):
+            # Image display would need image URLs in ANIME_DATA or a placeholder
+            # st.image(anime_rec.get('image_url', 'https://via.placeholder.com/150'), use_column_width='auto')
+            st.caption("Image placeholder")
 
-            genres_str = ", ".join(anime_rec.get('genres_list', []))
+            genres_str = ", ".join(anime_rec.get('genre', []))
             if genres_str: st.markdown(f"**Genres:** {genres_str}")
 
-            themes_str = ", ".join(anime_rec.get('theme_names', []))
-            if themes_str: st.markdown(f"**Themes:** {themes_str}")
+            description = anime_rec.get('description', 'N/A')
+            if description and description != 'N/A':
+                 st.caption(f"**Description:** {description[:150] + '...' if len(description) > 150 else description}")
 
-            studios_str = ", ".join(anime_rec.get('studio_names', []))
-            if studios_str: st.markdown(f"**Studios:** {studios_str}")
-
-            synopsis = anime_rec.get('synopsis', 'N/A')
-            if synopsis and synopsis != 'No synopsis available.':
-                 st.caption(f"**Synopsis:** {synopsis[:150] + '...' if len(synopsis) > 150 else synopsis}")
-
-            if anime_rec.get('mal_id'):
-                st.markdown(f"[View on MyAnimeList](https://myanimelist.net/anime/{anime_rec['mal_id']})", unsafe_allow_html=True)
-
-
+# Section 1: Recommend based on favorite anime
 st.header('Recommend Based on Your Favorite Anime')
-anime_name_input = st.text_input('Enter your favorite anime title here:', key='favorite_anime_input')
+# Create a selectbox with anime titles from ANIME_DF_PROCESSED if available
+if ANIME_DF_PROCESSED is not None and not ANIME_DF_PROCESSED.empty:
+    anime_titles = ANIME_DF_PROCESSED['title'].tolist()
+    anime_name_input = st.selectbox('Select your favorite anime:', options=[""] + anime_titles, key='favorite_anime_input')
+else:
+    anime_name_input = st.text_input('Enter your favorite anime title here (TF-IDF disabled):', key='favorite_anime_input_disabled')
+
 
 if st.button('Recommend Similar Anime', key='recommend_similar_btn'):
-    st.session_state.genre_recommendations = None
-    st.session_state.selected_genre = None
-    st.session_state.jikan_error_displayed = False
+    if COSINE_SIM_MATRIX is None or ANIME_DF_PROCESSED.empty:
+        st.error("TF-IDF data not available. Cannot provide recommendations.")
+    elif anime_name_input:
+        with st.spinner(f"Fetching recommendations similar to '{anime_name_input}' using TF-IDF..."):
+            recommendations_titles = recommend_similar_anime_tfidf(
+                anime_name_input,
+                ANIME_DF_PROCESSED,
+                COSINE_SIM_MATRIX,
+                top_n=6 # Fetch 6 for 2 rows of 3
+            )
 
-    if anime_name_input:
-        with st.spinner(f"Fetching recommendations similar to '{anime_name_input}'..."):
-            recommendations = recommend_similar_anime(anime_name_input, top_n=6) # Fetch 6 for 2 rows of 3
+        if recommendations_titles:
+            st.subheader(f"TF-IDF Recommendations similar to '{anime_name_input}':")
+            # Since recommend_similar_anime_tfidf returns titles, we fetch details for display
+            recommendations_details = []
+            for title in recommendations_titles:
+                detail = ANIME_DF_PROCESSED[ANIME_DF_PROCESSED['title'] == title].iloc[0].to_dict()
+                recommendations_details.append(detail)
 
-        if recommendations:
-            st.subheader(f"Recommendations similar to '{anime_name_input}':")
             num_columns = 3
-            for i in range(0, len(recommendations), num_columns):
+            for i in range(0, len(recommendations_details), num_columns):
                 cols = st.columns(num_columns)
-                for j, rec in enumerate(recommendations[i : i + num_columns]):
-                    display_anime_card(rec, cols[j])
-        elif not st.session_state.jikan_error_displayed:
-            st.info(f"No recommendations found for '{anime_name_input}'.")
-    else:
-        st.error("Please enter an anime title.")
-
-st.header('New to Anime? Explore by Genre!')
-
-if not GENRE_ID_MAP:
-    st.error("Failed to load anime genres from the API. Genre recommendations are unavailable.")
-else:
-    genres_for_buttons = ["Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror",
-                          "Mystery", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural"]
-    actual_genres_to_show = [g for g in genres_for_buttons if g.lower() in GENRE_ID_MAP]
-
-    if not actual_genres_to_show:
-        st.info("Could not identify common genres from the loaded Jikan genre list to display as buttons.")
-    else:
-        # --- Genre Button Selection ---
-        button_cols = st.columns(6) # More columns for genre buttons
-        col_idx = 0
-        for genre_display_name in actual_genres_to_show:
-            button_label = f"{genre_display_name}" # Shorter labels
-            genre_key_name = genre_display_name.replace(" ", "_").replace("-", "_").lower()
-            if button_cols[col_idx % 6].button(button_label, key=f"genre_btn_{genre_key_name}"):
-                if st.session_state.selected_genre != genre_display_name:
-                    st.session_state.selected_genre = genre_display_name
-                    st.session_state.genre_page = 1
-                    st.session_state.genre_recommendations = None
-                st.session_state.jikan_error_displayed = False
-                st.experimental_rerun()
-            col_idx +=1
-
-    # --- Data Fetching and Display for Selected Genre ---
-    if st.session_state.selected_genre:
-        st.subheader(f"Exploring {st.session_state.selected_genre} Anime (Page {st.session_state.genre_page})")
-        genre_id = GENRE_ID_MAP.get(st.session_state.selected_genre.lower())
-
-        if not genre_id:
-            st.error(f"Cannot find ID for genre '{st.session_state.selected_genre}'.")
-            st.session_state.jikan_error_displayed = True
+                for j, rec_detail in enumerate(recommendations_details[i : i + num_columns]):
+                    display_anime_card(rec_detail, cols[j], source_note="(TF-IDF)")
         else:
-            items_per_page = 9
-            with st.spinner(f"Fetching {st.session_state.selected_genre} anime (Page {st.session_state.genre_page})..."):
-                anime_list_raw, pagination_info = search_anime_by_genre(
-                    genre_id,
-                    page=st.session_state.genre_page,
-                    limit=items_per_page
-                )
+            # Error messages are now typically handled inside recommend_similar_anime_tfidf
+            if not st.session_state.get('tfidf_error_displayed', False): # Check if specific error was already shown
+                 st.info(f"No TF-IDF recommendations found for '{anime_name_input}'.")
+            st.session_state.tfidf_error_displayed = False # Reset flag
+    else:
+        st.error("Please select or enter an anime title.")
 
-            if pagination_info:
-                st.session_state.genre_last_page = pagination_info.get('last_visible_page', st.session_state.genre_page)
-                st.session_state.genre_has_next_page = pagination_info.get('has_next_page', False)
-            else:
-                st.session_state.genre_last_page = st.session_state.genre_page
-                st.session_state.genre_has_next_page = False
+# Section 2: Recommendations for new watchers by genre (using legacy for now)
+st.header('New to Anime? Explore by Genre!')
+genres_for_buttons = ["Action", "Comedy", "Drama", "Fantasy", "Romance", "Sci-Fi"]
+actual_genres_to_show = genres_for_buttons # Simplified for this non-API version
 
-            formatted_recommendations = []
-            if anime_list_raw:
-                for anime_data in anime_list_raw:
-                    formatted = format_anime_data_from_jikan(anime_data)
-                    if formatted:
-                        formatted_recommendations.append(formatted)
-            st.session_state.genre_recommendations = formatted_recommendations
+if actual_genres_to_show:
+    button_cols = st.columns(len(actual_genres_to_show))
+    for idx, genre_display_name in enumerate(actual_genres_to_show):
+        if button_cols[idx].button(genre_display_name, key=f"genre_btn_{genre_display_name.lower()}"):
+            st.session_state.selected_genre_legacy = genre_display_name
 
-            if not st.session_state.genre_recommendations and not st.session_state.jikan_error_displayed:
-                st.info(f"No anime found for {st.session_state.selected_genre} on this page.")
+if 'selected_genre_legacy' in st.session_state and st.session_state.selected_genre_legacy:
+    st.subheader(f"Exploring {st.session_state.selected_genre_legacy} Anime (Legacy)")
+    with st.spinner(f"Fetching {st.session_state.selected_genre_legacy} anime..."):
+        genre_recommendations = recommend_by_genre_legacy(st.session_state.selected_genre_legacy, ANIME_DATA, n=3)
 
-    # --- Display Fetched Genre Recommendations in a Grid ---
-    if st.session_state.selected_genre and st.session_state.genre_recommendations:
+    if genre_recommendations:
         num_columns_genre = 3
-        for i in range(0, len(st.session_state.genre_recommendations), num_columns_genre):
+        for i in range(0, len(genre_recommendations), num_columns_genre):
             cols_genre = st.columns(num_columns_genre)
-            for j, rec in enumerate(st.session_state.genre_recommendations[i : i + num_columns_genre]):
-                 display_anime_card(rec, cols_genre[j])
-
-    # --- Pagination Controls ---
-    if st.session_state.selected_genre:
-        pg_col1, pg_col2, pg_col3 = st.columns([2, 3, 2]) # Adjusted column ratios
-        with pg_col1:
-            if st.button("⬅️ Previous Page", disabled=(st.session_state.genre_page <= 1), use_container_width=True):
-                st.session_state.genre_page -= 1
-                st.experimental_rerun()
-        with pg_col2:
-            if st.session_state.genre_last_page > 0 :
-                 st.markdown(f"<p style='text-align: center; font-weight: bold;'>Page {st.session_state.genre_page} of {st.session_state.genre_last_page}</p>", unsafe_allow_html=True)
-            else:
-                 st.markdown(f"<p style='text-align: center; font-weight: bold;'>Page {st.session_state.genre_page}</p>", unsafe_allow_html=True)
-
-        with pg_col3:
-            if st.button("Next Page ➡️", disabled=(not st.session_state.genre_has_next_page or st.session_state.genre_page >= st.session_state.genre_last_page), use_container_width=True):
-                st.session_state.genre_page += 1
-                st.experimental_rerun()
+            for j, rec in enumerate(genre_recommendations[i : i + num_columns_genre]):
+                 display_anime_card(rec, cols_genre[j], source_note="(Legacy/Genre)")
+    else:
+        st.info(f"No anime found for {st.session_state.selected_genre_legacy} in the local data.")
 
 with st.sidebar:
-    st.title('Anime Recommendation System🤖')
-    st.write('This is a simple Anime Recommendation System that recommends you some similar anime based on your favorite anime.')
-    st.write('Please enter your favorite anime in the text box above and click on the "Recommend" button to get the recommendations.')
-    st.write('Enjoy!😊')
+    st.title('Anime RecSys')
+    st.write("TF-IDF Branch")
+    if COSINE_SIM_MATRIX is not None and ANIME_DF_PROCESSED is not None:
+        st.success(f"TF-IDF Matrix: {COSINE_SIM_MATRIX.shape}")
+        st.info(f"Anime DataFrame: {ANIME_DF_PROCESSED.shape[0]} entries")
+    else:
+        st.error("TF-IDF data failed to load.")
