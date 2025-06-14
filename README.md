@@ -1,59 +1,59 @@
-# Anime Recommendation System
+# Anime Recommendation System (Local Data & TF-IDF Version)
 
-This Streamlit application provides dynamic anime recommendations by leveraging the **Jikan API**, an unofficial MyAnimeList API. It allows users to discover new anime by finding titles similar to their favorites or by exploring recommendations within specific genres, with all data fetched live.
+This Streamlit application provides anime recommendations based on a **locally stored dataset**. It allows users to discover new anime by finding titles similar to their favorites (using TF-IDF on descriptions) or by exploring anime within specific genres.
 
 ## Features
 
-*   **Recommend Similar Anime:**
-    *   Users enter the title of an anime they enjoy.
-    *   The system queries the Jikan API to find the MyAnimeList ID of the input anime.
-    *   It then fetches direct recommendations for that anime from Jikan, which are often curated by MyAnimeList users.
-    *   Results are displayed with details like score, image, genres, a synopsis snippet, and a direct link to the anime's MyAnimeList page.
+*   **Recommend Similar Anime (TF-IDF Based):**
+    *   Users select an anime title they enjoy from the local dataset.
+    *   The system utilizes **Term Frequency-Inverse Document Frequency (TF-IDF)** to analyze the textual content of anime descriptions. This method vectorizes descriptions, giving more weight to terms that are significant for a particular anime description in the context of all descriptions. It considers unigrams and bigrams (sequences of one and two words) and filters out common English stop words and terms that are too rare or too frequent across the dataset.
+    *   **Cosine Similarity** is then computed on these TF-IDF vectors to find anime with the most similar description content.
+    *   The top N most similar anime titles are then recommended to the user.
 
-*   **Explore by Genre (For New Watchers):**
-    *   Users can select from a list of popular genres (e.g., Action, Comedy, Fantasy, Sci-Fi, etc.), dynamically sourced from the Jikan API's genre list.
-    *   The application then queries the Jikan API for popular anime within the selected genre.
-    *   A few sample anime are displayed with their score, image, genres, synopsis, and a link to their MyAnimeList page.
+*   **Explore by Genre:**
+    *   Users can select from a predefined list of popular genres.
+    *   The application filters the local `ANIME_DATA` to find anime tagged with the selected genre.
+    *   A sample of anime from that genre is displayed.
 
 ## How It Works
 
-The application's core logic relies on real-time interactions with the Jikan API:
+1.  **Data Loading & Preprocessing:**
+    *   The application loads anime information from a Python list of dictionaries (`ANIME_DATA`) defined within `src/main.py`.
+    *   On startup, it processes this data:
+        *   Anime descriptions are vectorized using TF-IDF.
+        *   A cosine similarity matrix is pre-computed for all pairs of anime based on their description vectors. This matrix is cached for efficiency.
+2.  **Similarity-Based Recommendations:**
+    *   When a user selects a favorite anime, its corresponding row in the cosine similarity matrix is used to find other anime with the highest similarity scores.
+3.  **Genre-Based Recommendations:**
+    *   This feature performs a simple filter on the `ANIME_DATA` based on the genre strings associated with each anime.
 
-1.  **Fetching Anime Data:** When a user searches for an anime or requests recommendations by genre, the application makes HTTP GET requests to specific Jikan API endpoints.
-2.  **Similar Anime Logic:**
-    *   The input title is used to search for the anime on MyAnimeList via the Jikan API to retrieve its unique MAL ID.
-    *   This MAL ID is then used to fetch user-generated recommendations for that specific anime directly from Jikan.
-3.  **Genre Exploration Logic:**
-    *   The application first fetches a list of available anime genres and their IDs from Jikan.
-    *   When a user selects a genre, the system queries Jikan for top-scoring or popular anime within that genre.
-4.  **Data Presentation:** All anime information, including titles, scores, synopses, images, and genre lists, is parsed from the Jikan API responses and formatted for display in the Streamlit UI.
+## Data Source
 
-## API Usage: Jikan API
+This version of the application relies exclusively on a **manually curated, local dataset** (`ANIME_DATA` list within `src/main.py`). It does **not** connect to any external APIs for fetching anime data or recommendations.
 
-*   **Data Source:** This application uses the **Jikan API (v4)**, available at `https://api.jikan.moe/v4/`. Jikan is an unofficial, free, and open-source REST API for MyAnimeList, providing access to a wide range of anime and manga data.
-*   **Dependency:** The functionality and availability of this recommendation system are directly dependent on the Jikan API.
-*   **Rate Limiting:** The Jikan API has rate limits to prevent abuse. This application attempts to respect these by including small delays (`time.sleep(0.5)`) between API calls made by the `jikan_client.py` module. Frequent or rapid use might still lead to temporary blocks by the API.
-*   **Unofficial Nature:** As Jikan is an unofficial API, its data accuracy and availability are tied to MyAnimeList's own structure and any changes MyAnimeList might make.
+## Dependencies & Setup
+
+To run this application, you'll need Python and the following key libraries:
+
+*   Streamlit
+*   Pandas
+*   Scikit-learn
+
+To install all necessary dependencies, navigate to the project's root directory and run:
+```bash
+pip install -r requirements.txt
+```
 
 ## How to Run
 
-1.  **Prerequisites:**
-    *   Python 3.7+
-    *   Streamlit
-    *   Requests (Python HTTP library)
-2.  **Installation:**
-    *   If you haven't already, install Streamlit and Requests:
-        ```bash
-        pip install streamlit requests
-        ```
-3.  **Running the Application:**
-    *   Navigate to the project's root directory in your terminal.
-    *   Execute the following command:
-        ```bash
-        streamlit run src/main.py
-        ```
-    *   Streamlit will typically open the application automatically in your default web browser.
+1.  Ensure all dependencies are installed by following the setup instructions above.
+2.  Navigate to the project's root directory in your terminal.
+3.  Execute the Streamlit application using:
+    ```bash
+    streamlit run src/main.py
+    ```
+    This will typically open the application in your default web browser.
 
-## Contributing (Future)
+## Note
 
-Contributions that improve the UI/UX, enhance recommendation logic (e.g., advanced filtering, alternative recommendation sources), or add new features are welcome. Please refer to future contribution guidelines when available.
+This version is specifically designed to demonstrate content-based filtering using TF-IDF on a local dataset. For a version that uses a live external API (Jikan API for MyAnimeList data), please refer to other branches or versions of this project.
